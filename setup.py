@@ -44,7 +44,7 @@ setup(
     install_requires=read_requirements(),
     entry_points={
         "console_scripts": [
-            "md2notion=md2notion:main",
+            "md2notion=md2notion_cli:main",
         ],
     },
     keywords="markdown notion api converter cli",

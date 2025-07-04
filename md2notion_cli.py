@@ -291,10 +291,13 @@ class MarkdownToNotionConverter:
             
             # Add content blocks
             if blocks:
-                self.notion.blocks.children.append(
-                    block_id=new_page["id"],
-                    children=blocks
-                )
+                # Notion API 限制每次最多 100 blocks
+                for i in range(0, len(blocks), 100):
+                    batch = blocks[i:i+100]
+                    self.notion.blocks.children.append(
+                        block_id=new_page["id"],
+                        children=batch
+                    )
                 logger.info(f"Added {len(blocks)} content blocks")
             
             return new_page['url']
