@@ -30,10 +30,13 @@ class MarkdownToNotionConverter:
     def __init__(self, token: str):
         """Initialize the converter with Notion API token"""
         self.notion = Client(auth=token)
+        # Use sync methods to avoid async issues
     
     def clean_title(self, text: str) -> str:
         """Remove markdown formatting from title"""
         return re.sub(r'\*+', '', text).strip()
+    
+
     
     def split_text_for_rich_text(self, text: str, max_length: int = 100) -> List[str]:
         """
@@ -295,9 +298,67 @@ class MarkdownToNotionConverter:
         flush_paragraph()
         return blocks
     
+    def upload_markdown_text_to_notion(self, markdown_content: str, page_id: str, title: str | None = None) -> str:
+        """
+        Upload Markdown text content to Notion page
+        
+        Args:
+            markdown_content: Markdown text content
+            page_id: Notion page ID
+            title: Page title (optional, defaults to "Untitled")
+        
+        Returns:
+            URL of the created page
+        """
+        try:
+            logger.info(f"Processing markdown content (length: {len(markdown_content)})")
+            
+            # Convert to Notion blocks
+            blocks = self.convert_markdown_to_blocks(markdown_content)
+            logger.info(f"Converted {len(blocks)} blocks")
+            
+            # Use default title if not provided
+            if not title:
+                title = "Untitled"
+            
+            # Create new page
+            new_page = self.notion.pages.create(  # type: ignore
+                parent={"page_id": page_id},
+                properties={
+                    "title": {
+                        "title": [
+                            {
+                                "text": {
+                                    "content": title
+                                }
+                            }
+                        ]
+                    }
+                }
+            )
+            
+            logger.info(f"Created new page: {new_page['url']}")  # type: ignore
+            
+            # Add content blocks
+            if blocks:
+                # Notion API 限制每次最多 100 blocks
+                for i in range(0, len(blocks), 100):
+                    batch = blocks[i:i+100]
+                    self.notion.blocks.children.append(  # type: ignore
+                        block_id=new_page["id"],  # type: ignore
+                        children=batch
+                    )
+                logger.info(f"Added {len(blocks)} content blocks")
+            
+            return new_page['url']  # type: ignore
+            
+        except Exception as e:
+            logger.error(f"Error uploading to Notion: {str(e)}")
+            raise
+
     def upload_to_notion(self, markdown_file: str, page_id: str, title: str | None = None) -> str:
         """
-        Upload Markdown content to Notion page
+        Upload Markdown file to Notion page
         
         Args:
             markdown_file: Path to markdown file
@@ -314,44 +375,12 @@ class MarkdownToNotionConverter:
             
             logger.info(f"Reading markdown file: {markdown_file}")
             
-            # Convert to Notion blocks
-            blocks = self.convert_markdown_to_blocks(content)
-            logger.info(f"Converted {len(blocks)} blocks")
-            
             # Use filename as title if not provided
             if not title:
                 title = Path(markdown_file).stem
             
-            # Create new page
-            new_page = self.notion.pages.create(
-                parent={"page_id": page_id},
-                properties={
-                    "title": {
-                        "title": [
-                            {
-                                "text": {
-                                    "content": title
-                                }
-                            }
-                        ]
-                    }
-                }
-            )
-            
-            logger.info(f"Created new page: {new_page['url']}")
-            
-            # Add content blocks
-            if blocks:
-                # Notion API 限制每次最多 100 blocks
-                for i in range(0, len(blocks), 100):
-                    batch = blocks[i:i+100]
-                    self.notion.blocks.children.append(
-                        block_id=new_page["id"],
-                        children=batch
-                    )
-                logger.info(f"Added {len(blocks)} content blocks")
-            
-            return new_page['url']
+            # Use the text upload method
+            return self.upload_markdown_text_to_notion(content, page_id, title)
             
         except FileNotFoundError:
             logger.error(f"Markdown file not found: {markdown_file}")

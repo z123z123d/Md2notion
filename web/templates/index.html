@@ -213,6 +213,44 @@
             color: var(--text-primary);
         }
 
+        .form-group textarea {
+            resize: vertical;
+            min-height: 200px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            line-height: 1.5;
+        }
+
+        .mode-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 20px;
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .mode-btn:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--primary);
+            color: var(--text-primary);
+        }
+
+        .mode-btn.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: white;
+        }
+
+        .input-mode {
+            transition: all 0.3s ease;
+        }
+
         .form-group input:focus, .form-group textarea:focus {
             outline: none;
             border-color: var(--border-focus);
@@ -613,19 +651,56 @@
         </div>
 
         <form id="uploadForm" enctype="multipart/form-data">
-            <div class="form-group">
-                <label for="file">Markdown File</label>
-                <div class="file-upload">
-                    <input type="file" id="file" name="file" accept=".md,.markdown,.txt" required>
-                    <label for="file" class="file-upload-label">
-                        <span class="file-upload-icon">📄</span>
-                        <div style="font-weight: 500; margin-bottom: 4px;">Click to select or drag & drop</div>
-                        <div style="font-size: 0.875rem; color: var(--text-secondary);">
-                            Supports .md, .markdown, .txt files
-                        </div>
-                    </label>
+            <!-- Input Mode Toggle -->
+            <div class="form-group" style="margin-bottom: 32px;">
+                <div style="display: flex; gap: 12px; justify-content: center;">
+                    <button type="button" class="mode-btn active" data-mode="file" id="fileModeBtn">
+                        <span>📄</span>
+                        <span>Upload File</span>
+                    </button>
+                    <button type="button" class="mode-btn" data-mode="text" id="textModeBtn">
+                        <span>✏️</span>
+                        <span>Text Input</span>
+                    </button>
                 </div>
-                <div class="file-info" id="fileInfo"></div>
+            </div>
+
+            <!-- File Upload Mode -->
+            <div id="fileMode" class="input-mode">
+                <div class="form-group">
+                    <label for="file">Markdown File</label>
+                    <div class="file-upload">
+                        <input type="file" id="file" name="file" accept=".md,.markdown,.txt">
+                        <label for="file" class="file-upload-label">
+                            <span class="file-upload-icon">📄</span>
+                            <div style="font-weight: 500; margin-bottom: 4px;">Click to select or drag & drop</div>
+                            <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                                Supports .md, .markdown, .txt files
+                            </div>
+                        </label>
+                    </div>
+                    <div class="file-info" id="fileInfo"></div>
+                </div>
+            </div>
+
+            <!-- Text Input Mode -->
+            <div id="textMode" class="input-mode" style="display: none;">
+                <div class="form-group">
+                    <label for="markdown_text">Markdown Text</label>
+                    <textarea id="markdown_text" name="markdown_text" rows="12" 
+                              placeholder="# Your Markdown Content Here
+
+## Features
+- **Bold text** and *italic text*
+- `Code snippets`
+- Lists and more...
+
+Start typing your markdown content above..."></textarea>
+                    <div class="help-text">
+                        <span>📝</span>
+                        Write your markdown content directly in the textarea above
+                    </div>
+                </div>
             </div>
 
             <div class="form-group">
@@ -681,6 +756,11 @@
         const submitBtn = document.getElementById('submitBtn');
         const loading = document.getElementById('loading');
         const result = document.getElementById('result');
+        const fileModeBtn = document.getElementById('fileModeBtn');
+        const textModeBtn = document.getElementById('textModeBtn');
+        const fileMode = document.getElementById('fileMode');
+        const textMode = document.getElementById('textMode');
+        const markdownTextarea = document.getElementById('markdown_text');
 
         // File upload handling
         fileInput.addEventListener('change', function(e) {
@@ -725,9 +805,42 @@
             }
         });
 
+        // Mode switching
+        fileModeBtn.addEventListener('click', function() {
+            fileModeBtn.classList.add('active');
+            textModeBtn.classList.remove('active');
+            fileMode.style.display = 'block';
+            textMode.style.display = 'none';
+            fileInput.required = true;
+            markdownTextarea.required = false;
+            markdownTextarea.value = '';
+        });
+
+        textModeBtn.addEventListener('click', function() {
+            textModeBtn.classList.add('active');
+            fileModeBtn.classList.remove('active');
+            textMode.style.display = 'block';
+            fileMode.style.display = 'none';
+            markdownTextarea.required = true;
+            fileInput.required = false;
+            fileInput.value = '';
+            fileInfo.style.display = 'none';
+        });
+
         // Form submission
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
+            
+            // Validate input based on current mode
+            const isFileMode = fileModeBtn.classList.contains('active');
+            if (isFileMode && !fileInput.files[0]) {
+                alert('Please select a file to upload.');
+                return;
+            }
+            if (!isFileMode && !markdownTextarea.value.trim()) {
+                alert('Please enter some markdown text.');
+                return;
+            }
             
             const formData = new FormData(form);
             
