@@ -35,6 +35,48 @@ class MarkdownToNotionConverter:
         """Remove markdown formatting from title"""
         return re.sub(r'\*+', '', text).strip()
     
+    def split_text_for_rich_text(self, text: str, max_length: int = 100) -> List[str]:
+        """
+        Split text into chunks that fit within Notion's rich_text length limit.
+        Preserves word boundaries when possible.
+        
+        Args:
+            text: Text to split
+            max_length: Maximum length per chunk (default 100 for Notion API)
+            
+        Returns:
+            List of text chunks
+        """
+        if len(text) <= max_length:
+            return [text]
+        
+        chunks = []
+        current_chunk = ""
+        words = text.split()
+        
+        for word in words:
+            # If adding this word would exceed the limit
+            if len(current_chunk) + len(word) + 1 > max_length:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = word
+                else:
+                    # Single word is too long, split it
+                    while len(word) > max_length:
+                        chunks.append(word[:max_length])
+                        word = word[max_length:]
+                    current_chunk = word
+            else:
+                if current_chunk:
+                    current_chunk += " " + word
+                else:
+                    current_chunk = word
+        
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        return chunks
+    
     def parse_inline_equation_and_style(self, text: str) -> List[Dict[str, Any]]:
         """
         Parse inline equations and text styling
@@ -116,13 +158,16 @@ class MarkdownToNotionConverter:
             if paragraph_lines:
                 paragraph = ' '.join(paragraph_lines).strip()
                 if paragraph:
-                    blocks.append({
-                        "object": "block",
-                        "type": "paragraph",
-                        "paragraph": {
-                            "rich_text": self.parse_inline_equation_and_style(paragraph)
-                        }
-                    })
+                    # Split long paragraphs to fit within Notion's rich_text length limit
+                    text_chunks = self.split_text_for_rich_text(paragraph)
+                    for chunk in text_chunks:
+                        blocks.append({
+                            "object": "block",
+                            "type": "paragraph",
+                            "paragraph": {
+                                "rich_text": self.parse_inline_equation_and_style(chunk)
+                            }
+                        })
                 paragraph_lines.clear()
         
         i = 0
@@ -156,13 +201,16 @@ class MarkdownToNotionConverter:
             if line.strip().startswith('* '):
                 flush_paragraph()
                 item_text = line.strip()[2:].strip()
-                blocks.append({
-                    "object": "block",
-                    "type": "bulleted_list_item",
-                    "bulleted_list_item": {
-                        "rich_text": self.parse_inline_equation_and_style(item_text)
-                    }
-                })
+                # Split long list items to fit within Notion's rich_text length limit
+                text_chunks = self.split_text_for_rich_text(item_text)
+                for chunk in text_chunks:
+                    blocks.append({
+                        "object": "block",
+                        "type": "bulleted_list_item",
+                        "bulleted_list_item": {
+                            "rich_text": self.parse_inline_equation_and_style(chunk)
+                        }
+                    })
                 i += 1
                 continue
             
@@ -203,30 +251,33 @@ class MarkdownToNotionConverter:
                 level = len(line) - len(line.lstrip('#'))
                 title = self.clean_title(line.lstrip('#').strip())
                 
-                if level == 1:
-                    blocks.append({
-                        "object": "block",
-                        "type": "heading_1",
-                        "heading_1": {
-                            "rich_text": self.parse_inline_equation_and_style(title)
-                        }
-                    })
-                elif level == 2:
-                    blocks.append({
-                        "object": "block",
-                        "type": "heading_2",
-                        "heading_2": {
-                            "rich_text": self.parse_inline_equation_and_style(title)
-                        }
-                    })
-                elif level == 3:
-                    blocks.append({
-                        "object": "block",
-                        "type": "heading_3",
-                        "heading_3": {
-                            "rich_text": self.parse_inline_equation_and_style(title)
-                        }
-                    })
+                # Split long headings to fit within Notion's rich_text length limit
+                text_chunks = self.split_text_for_rich_text(title)
+                for chunk in text_chunks:
+                    if level == 1:
+                        blocks.append({
+                            "object": "block",
+                            "type": "heading_1",
+                            "heading_1": {
+                                "rich_text": self.parse_inline_equation_and_style(chunk)
+                            }
+                        })
+                    elif level == 2:
+                        blocks.append({
+                            "object": "block",
+                            "type": "heading_2",
+                            "heading_2": {
+                                "rich_text": self.parse_inline_equation_and_style(chunk)
+                            }
+                        })
+                    elif level == 3:
+                        blocks.append({
+                            "object": "block",
+                            "type": "heading_3",
+                            "heading_3": {
+                                "rich_text": self.parse_inline_equation_and_style(chunk)
+                            }
+                        })
                 i += 1
                 continue
             
@@ -244,7 +295,7 @@ class MarkdownToNotionConverter:
         flush_paragraph()
         return blocks
     
-    def upload_to_notion(self, markdown_file: str, page_id: str, title: str = None) -> str:
+    def upload_to_notion(self, markdown_file: str, page_id: str, title: str | None = None) -> str:
         """
         Upload Markdown content to Notion page
         
