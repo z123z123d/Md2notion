@@ -78,30 +78,35 @@ class MarkdownToNotionConverter:
         
         return chunks
     
-    def parse_inline_equation_and_style(self, text: str) -> List[Dict[str, Any]]:
+    def parse_equations_and_style(self, text: str) -> List[Dict[str, Any]]:
         """
-        Parse inline equations and text styling
-        Supports: $...$ equations, *text* italic, `text` code, **text** bold
+        Parse equations and text styling
+        优先提取所有$...$公式块，剩余部分再做样式分割，保证公式内容不被样式正则分割。
         """
+        import re
         rich_text = []
+        # 先分割出所有$...$公式块（避免匹配$$...$$）
+        pattern = re.compile(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)', re.DOTALL)
         last_idx = 0
-        
-        # Handle $...$ inline equations
-        for m in re.finditer(r'\$(.+?)\$', text):
+        for m in pattern.finditer(text):
+            # 公式前的普通文本
             if m.start() > last_idx:
                 t = text[last_idx:m.start()]
-                rich_text.extend(self.parse_style(t))
+                if t:
+                    rich_text.extend(self.parse_style(t))
+            # 公式内容
             eq = m.group(1)
+            eq = eq.strip('\n ').replace('\n', ' ')
             rich_text.append({
                 "type": "equation",
                 "equation": {"expression": eq}
             })
             last_idx = m.end()
-        
+        # 公式后的普通文本
         if last_idx < len(text):
             t = text[last_idx:]
-            rich_text.extend(self.parse_style(t))
-        
+            if t:
+                rich_text.extend(self.parse_style(t))
         return rich_text
     
     def parse_style(self, text: str) -> List[Dict[str, Any]]:
@@ -146,155 +151,120 @@ class MarkdownToNotionConverter:
         
         return rich_text
     
-    def convert_markdown_to_blocks(self, markdown_content: str) -> List[Dict[str, Any]]:
+    def convert_markdown_to_blocks(self, markdown_content: str) -> list:
         """
         Convert Markdown content to Notion blocks
-        Supports: headings, equations, lists, paragraphs, dividers
+        支持标题、块级公式、列表、段落、分隔线、内联公式，保证顺序与原文一致
         """
+        import re
         blocks = []
-        lines = markdown_content.split('\n')
-        paragraph_lines = []
-        
-        def flush_paragraph():
-            if paragraph_lines:
-                paragraph = ' '.join(paragraph_lines).strip()
-                if paragraph:
-                    # Split long paragraphs to fit within Notion's rich_text length limit
-                    text_chunks = self.split_text_for_rich_text(paragraph)
-                    for chunk in text_chunks:
-                        blocks.append({
-                            "object": "block",
-                            "type": "paragraph",
-                            "paragraph": {
-                                "rich_text": self.parse_inline_equation_and_style(chunk)
-                            }
-                        })
-                paragraph_lines.clear()
-        
-        i = 0
-        n = len(lines)
-        
-        while i < n:
-            line = lines[i].rstrip()
-            
-            # Divider ---
-            if re.match(r'^\s*-{3,}\s*$', line):
-                flush_paragraph()
-                blocks.append({"object": "block", "type": "divider", "divider": {}})
-                i += 1
+
+        # 清理特殊字符
+        markdown_content = markdown_content.replace('\x0c', '\\frac')
+        markdown_content = markdown_content.replace('\x07', '\\alpha')
+
+        # 1. 分割为文本块和块级公式块
+        # 支持多行和单行块级公式
+        pattern = re.compile(r'(\$\$\s*\n.*?\n\s*\$\$|\$\$.*?\$\$)', re.DOTALL)
+        parts = pattern.split(markdown_content)
+
+        for part in parts:
+            part = part.strip()
+            if not part:
                 continue
-            
-            # Numbered list 1. 2. ...
-            if re.match(r'^\s*\d+\. ', line):
-                flush_paragraph()
-                item_text = re.sub(r'^\s*\d+\. ', '', line).strip()
-                blocks.append({
-                    "object": "block",
-                    "type": "numbered_list_item",
-                    "numbered_list_item": {
-                        "rich_text": self.parse_inline_equation_and_style(item_text)
-                    }
-                })
-                i += 1
-                continue
-            
-            # Bullet list *
-            if line.strip().startswith('* '):
-                flush_paragraph()
-                item_text = line.strip()[2:].strip()
-                # Split long list items to fit within Notion's rich_text length limit
-                text_chunks = self.split_text_for_rich_text(item_text)
-                for chunk in text_chunks:
-                    blocks.append({
-                        "object": "block",
-                        "type": "bulleted_list_item",
-                        "bulleted_list_item": {
-                            "rich_text": self.parse_inline_equation_and_style(chunk)
-                        }
-                    })
-                i += 1
-                continue
-            
-            # Block equation $$...$$ single line
-            if line.strip().startswith('$$') and line.strip().endswith('$$') and len(line.strip()) > 4:
-                flush_paragraph()
-                latex = line.strip()[2:-2].strip()
+            if part.startswith('$$'):
+                # 块级公式
+                latex = part[2:-2].strip()  # 去除前后$$
+                latex = latex.replace('\n', '\\')
                 blocks.append({
                     "object": "block",
                     "type": "equation",
                     "equation": {"expression": latex}
                 })
-                i += 1
-                continue
-            
-            # Multi-line block equation
-            if line.strip() == '$$':
-                flush_paragraph()
-                equation_lines = []
-                i += 1
-                while i < n and lines[i].strip() != '$$':
-                    equation_lines.append(lines[i])
-                    i += 1
-                if i < n:
-                    latex = '\\\\'.join(line.strip() for line in equation_lines if line.strip())
+            else:
+                # 普通文本块，处理标题、列表、分隔线、段落、内联公式
+                # 先处理标题
+                def heading_sub(m):
+                    level = len(m.group(1))
+                    title = m.group(2).strip()
                     blocks.append({
                         "object": "block",
-                        "type": "equation",
-                        "equation": {"expression": latex}
+                        "type": f"heading_{level}",
+                        f"heading_{level}": {
+                            "rich_text": self.parse_equations_and_style(title)
+                        }
                     })
-                i += 1
-                continue
-            
-            # Headings
-            if line.startswith('#'):
-                flush_paragraph()
-                level = len(line) - len(line.lstrip('#'))
-                title = self.clean_title(line.lstrip('#').strip())
-                
-                # Split long headings to fit within Notion's rich_text length limit
-                text_chunks = self.split_text_for_rich_text(title)
-                for chunk in text_chunks:
-                    if level == 1:
+                    return ''
+                part = re.sub(r'^(#{1,3})\s+(.+)$', heading_sub, part, flags=re.MULTILINE)
+
+                # 处理列表和分隔线
+                lines = part.split('\n')
+                paragraph_lines = []
+                for line in lines:
+                    line_strip = line.strip()
+                    if re.match(r'^\d+\.\s+', line_strip):
+                        # 先输出前面累计的段落
+                        if paragraph_lines:
+                            self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
+                            paragraph_lines = []
+                        item_text = re.sub(r'^\d+\.\s+', '', line_strip)
                         blocks.append({
                             "object": "block",
-                            "type": "heading_1",
-                            "heading_1": {
-                                "rich_text": self.parse_inline_equation_and_style(chunk)
+                            "type": "numbered_list_item",
+                            "numbered_list_item": {
+                                "rich_text": self.parse_equations_and_style(item_text)
                             }
                         })
-                    elif level == 2:
+                    elif line_strip.startswith('* '):
+                        if paragraph_lines:
+                            self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
+                            paragraph_lines = []
+                        item_text = line_strip[2:].strip()
                         blocks.append({
                             "object": "block",
-                            "type": "heading_2",
-                            "heading_2": {
-                                "rich_text": self.parse_inline_equation_and_style(chunk)
+                            "type": "bulleted_list_item",
+                            "bulleted_list_item": {
+                                "rich_text": self.parse_equations_and_style(item_text)
                             }
                         })
-                    elif level == 3:
-                        blocks.append({
-                            "object": "block",
-                            "type": "heading_3",
-                            "heading_3": {
-                                "rich_text": self.parse_inline_equation_and_style(chunk)
-                            }
-                        })
-                i += 1
-                continue
-            
-            # Empty line - flush paragraph
-            if not line.strip():
-                flush_paragraph()
-                i += 1
-                continue
-            
-            # Regular paragraph line
-            paragraph_lines.append(line)
-            i += 1
-        
-        # Flush remaining paragraph
-        flush_paragraph()
+                    elif re.match(r'^\s*-{3,}\s*$', line_strip):
+                        if paragraph_lines:
+                            self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
+                            paragraph_lines = []
+                        blocks.append({"object": "block", "type": "divider", "divider": {}})
+                    else:
+                        paragraph_lines.append(line)
+                # 剩余段落
+                if paragraph_lines:
+                    self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
         return blocks
-    
+
+    def _append_paragraph_block(self, blocks, text):
+        """辅助函数：将段落文本分割为 Notion 段落块，支持内联公式"""
+        text = text.strip()
+        if not text:
+            return
+        # 智能分段，包含公式的整体处理，否则分割
+        dollar_count = text.count('$')
+        if dollar_count >= 2:
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": self.parse_equations_and_style(text)
+                }
+            })
+        else:
+            # 分割长段落
+            for chunk in self.split_text_for_rich_text(text):
+                blocks.append({
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": self.parse_equations_and_style(chunk)
+                    }
+                })
+
     def append_markdown_text_to_notion(self, markdown_content: str, page_id: str) -> str:
         """
         Append Markdown text content to existing Notion page
