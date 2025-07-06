@@ -698,7 +698,7 @@
 Start typing your markdown content above..."></textarea>
                     <div class="help-text">
                         <span>📝</span>
-                        Write your markdown content directly in the textarea above
+                        Write your markdown content directly in the textarea above. <strong>Content will be appended to the existing page.</strong>
                     </div>
                 </div>
             </div>
@@ -734,7 +734,7 @@ Start typing your markdown content above..."></textarea>
             </div>
 
             <button type="submit" class="submit-btn" id="submitBtn">
-                <span>🚀 Convert to Notion</span>
+                <span>🚀 Create New Page</span>
             </button>
         </form>
 
@@ -814,6 +814,7 @@ Start typing your markdown content above..."></textarea>
             fileInput.required = true;
             markdownTextarea.required = false;
             markdownTextarea.value = '';
+            submitBtn.innerHTML = '<span>🚀 Create New Page</span>';
         });
 
         textModeBtn.addEventListener('click', function() {
@@ -825,6 +826,7 @@ Start typing your markdown content above..."></textarea>
             fileInput.required = false;
             fileInput.value = '';
             fileInfo.style.display = 'none';
+            submitBtn.innerHTML = '<span>📝 Append to Page</span>';
         });
 
         // Form submission
@@ -901,7 +903,8 @@ Start typing your markdown content above..."></textarea>
             } finally {
                 // Reset loading state
                 submitBtn.disabled = false;
-                submitBtn.innerHTML = '<span>🚀 Convert to Notion</span>';
+                const isFileMode = fileModeBtn.classList.contains('active');
+                submitBtn.innerHTML = isFileMode ? '<span>🚀 Create New Page</span>' : '<span>📝 Append to Page</span>';
                 loading.style.display = 'none';
             }
         });

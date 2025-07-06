@@ -86,40 +86,23 @@ def upload_file():
                 return jsonify({'error': f'Error uploading to Notion: {str(e)}'}), 500
                 
         elif markdown_text:
-            # Text input mode - save to temporary file first (like file upload)
+            # Text input mode - append to existing page
             try:
-                # Save text to temporary file (same as file upload)
-                filename = "text_input.md"
-                temp_path = os.path.join(tempfile.gettempdir(), filename)
+                # Convert and append to Notion
+                converter = MarkdownToNotionConverter(notion_token)
                 
-                # Write text to file with UTF-8 encoding
-                with open(temp_path, 'w', encoding='utf-8') as f:
-                    f.write(markdown_text)
+                # Append content to existing page
+                page_url = converter.append_markdown_text_to_notion(markdown_text, page_id)
                 
-                try:
-                    # Convert and upload to Notion (use same path as file upload)
-                    converter = MarkdownToNotionConverter(notion_token)
-                    
-                    # Use custom title if provided, otherwise use default
-                    page_title = title if title else "Untitled"
-                    
-                    # Upload to Notion using the same method as file upload
-                    page_url = converter.upload_to_notion(temp_path, page_id, page_title)
-                    
-                    return jsonify({
-                        'success': True,
-                        'message': 'Markdown text successfully uploaded to Notion!',
-                        'page_url': page_url,
-                        'title': page_title
-                    })
-                    
-                finally:
-                    # Clean up temporary file
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
+                return jsonify({
+                    'success': True,
+                    'message': 'Markdown text successfully appended to Notion page!',
+                    'page_url': page_url,
+                    'title': 'Content appended'
+                })
                 
             except Exception as e:
-                return jsonify({'error': f'Error uploading to Notion: {str(e)}'}), 500
+                return jsonify({'error': f'Error appending to Notion: {str(e)}'}), 500
         else:
             return jsonify({'error': 'Please provide either a file or markdown text'}), 400
             

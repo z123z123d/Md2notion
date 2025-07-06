@@ -36,8 +36,6 @@ class MarkdownToNotionConverter:
         """Remove markdown formatting from title"""
         return re.sub(r'\*+', '', text).strip()
     
-
-    
     def split_text_for_rich_text(self, text: str, max_length: int = 100) -> List[str]:
         """
         Split text into chunks that fit within Notion's rich_text length limit.
@@ -230,16 +228,15 @@ class MarkdownToNotionConverter:
                 continue
             
             # Multi-line block equation
-            if line.strip().startswith('$$'):
+            if line.strip() == '$$':
                 flush_paragraph()
-                equation_lines = [line.strip()[2:]]
+                equation_lines = []
                 i += 1
-                while i < n and not lines[i].strip().endswith('$$'):
+                while i < n and lines[i].strip() != '$$':
                     equation_lines.append(lines[i])
                     i += 1
                 if i < n:
-                    equation_lines.append(lines[i].strip()[:-2])
-                    latex = '\n'.join(equation_lines)
+                    latex = '\\\\'.join(line.strip() for line in equation_lines if line.strip())
                     blocks.append({
                         "object": "block",
                         "type": "equation",
@@ -298,6 +295,45 @@ class MarkdownToNotionConverter:
         flush_paragraph()
         return blocks
     
+    def append_markdown_text_to_notion(self, markdown_content: str, page_id: str) -> str:
+        """
+        Append Markdown text content to existing Notion page
+        
+        Args:
+            markdown_content: Markdown text content
+            page_id: Notion page ID
+        
+        Returns:
+            URL of the target page
+        """
+        try:
+            logger.info(f"Processing markdown content (length: {len(markdown_content)})")
+            
+            # Convert to Notion blocks
+            blocks = self.convert_markdown_to_blocks(markdown_content)
+            logger.info(f"Converted {len(blocks)} blocks")
+            
+            # Get page info to return URL
+            page_info = self.notion.pages.retrieve(page_id=page_id)  # type: ignore
+            page_url = page_info['url']  # type: ignore
+            
+            # Add content blocks to existing page
+            if blocks:
+                # Notion API 限制每次最多 100 blocks
+                for i in range(0, len(blocks), 100):
+                    batch = blocks[i:i+100]
+                    self.notion.blocks.children.append(  # type: ignore
+                        block_id=page_id,
+                        children=batch
+                    )
+                logger.info(f"Added {len(blocks)} content blocks to existing page")
+            
+            return page_url
+            
+        except Exception as e:
+            logger.error(f"Error appending to Notion: {str(e)}")
+            raise
+
     def upload_markdown_text_to_notion(self, markdown_content: str, page_id: str, title: str | None = None) -> str:
         """
         Upload Markdown text content to Notion page
