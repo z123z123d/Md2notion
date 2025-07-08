@@ -67,7 +67,7 @@ def upload_file():
                 page_title = title if title else os.path.splitext(filename)[0]
                 
                 # Upload to Notion
-                page_url = converter.upload_to_notion(temp_path, page_id, page_title)
+                page_url = converter.upload_file_to_notion(temp_path, page_id, page_title)
                 
                 # Clean up temporary file
                 os.remove(temp_path)
@@ -92,7 +92,7 @@ def upload_file():
                 converter = MarkdownToNotionConverter(notion_token)
                 
                 # Append content to existing page
-                page_url = converter.append_markdown_text_to_notion(markdown_text, page_id)
+                page_url = converter.append_markdown_to_notion(markdown_text, page_id)
                 
                 return jsonify({
                     'success': True,

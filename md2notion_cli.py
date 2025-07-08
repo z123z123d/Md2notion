@@ -30,223 +30,167 @@ class MarkdownToNotionConverter:
     def __init__(self, token: str):
         """Initialize the converter with Notion API token"""
         self.notion = Client(auth=token)
-        # Use sync methods to avoid async issues
     
-    def clean_title(self, text: str) -> str:
-        """Remove markdown formatting from title"""
-        return re.sub(r'\*+', '', text).strip()
-    
-    def split_text_for_rich_text(self, text: str, max_length: int = 100) -> List[str]:
-        """
-        Split text into chunks that fit within Notion's rich_text length limit.
-        Preserves word boundaries when possible.
-        
-        Args:
-            text: Text to split
-            max_length: Maximum length per chunk (default 100 for Notion API)
-            
-        Returns:
-            List of text chunks
-        """
-        if len(text) <= max_length:
-            return [text]
-        
-        chunks = []
-        current_chunk = ""
-        words = text.split()
-        
-        for word in words:
-            # If adding this word would exceed the limit
-            if len(current_chunk) + len(word) + 1 > max_length:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = word
-                else:
-                    # Single word is too long, split it
-                    while len(word) > max_length:
-                        chunks.append(word[:max_length])
-                        word = word[max_length:]
-                    current_chunk = word
-            else:
-                if current_chunk:
-                    current_chunk += " " + word
-                else:
-                    current_chunk = word
-        
-        if current_chunk:
-            chunks.append(current_chunk.strip())
-        
-        return chunks
-    
-    def parse_equations_and_style(self, text: str) -> List[Dict[str, Any]]:
-        """
-        Parse equations and text styling
-        优先提取所有$...$公式块，剩余部分再做样式分割，保证公式内容不被样式正则分割。
-        """
-        import re
-        rich_text = []
-        # 先分割出所有$...$公式块（避免匹配$$...$$）
-        pattern = re.compile(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)', re.DOTALL)
-        last_idx = 0
-        for m in pattern.finditer(text):
-            # 公式前的普通文本
-            if m.start() > last_idx:
-                t = text[last_idx:m.start()]
-                if t:
-                    rich_text.extend(self.parse_style(t))
-            # 公式内容
-            eq = m.group(1)
-            eq = eq.strip('\n ').replace('\n', ' ')
-            rich_text.append({
-                "type": "equation",
-                "equation": {"expression": eq}
-            })
-            last_idx = m.end()
-        # 公式后的普通文本
-        if last_idx < len(text):
-            t = text[last_idx:]
-            if t:
-                rich_text.extend(self.parse_style(t))
-        return rich_text
+    def _create_rich_text(self, content: str, annotations: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Create a rich text object"""
+        return {
+            "type": "text",
+            "text": {"content": content},
+            "annotations": annotations or {
+                "italic": False, "bold": False, "code": False,
+                "underline": False, "strikethrough": False, "color": "default"
+            }
+        }
     
     def parse_style(self, text: str) -> List[Dict[str, Any]]:
-        """
-        Parse text styling
-        Supports: **text** bold, *text* italic, `text` code
-        Priority: code > bold > italic > text
-        """
+        """Parse text styling: **bold**, *italic*, `code`"""
         rich_text = []
-        pattern = r'(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|[^*_`]+)'
         
-        for m in re.finditer(pattern, text):
-            s = m.group(0)
-            if s.startswith('`') and s.endswith('`'):
-                rich_text.append({
-                    "type": "text",
-                    "text": {"content": s[1:-1]},
-                    "annotations": {"code": True, "italic": False, "bold": False, 
-                                  "underline": False, "strikethrough": False, "color": "default"}
-                })
-            elif (s.startswith('**') and s.endswith('**')) or (s.startswith('__') and s.endswith('__')):
-                rich_text.append({
-                    "type": "text",
-                    "text": {"content": s[2:-2]},
-                    "annotations": {"bold": True, "italic": False, "code": False, 
-                                  "underline": False, "strikethrough": False, "color": "default"}
-                })
-            elif (s.startswith('*') and s.endswith('*')) or (s.startswith('_') and s.endswith('_')):
-                rich_text.append({
-                    "type": "text",
-                    "text": {"content": s[1:-1]},
-                    "annotations": {"italic": True, "bold": False, "code": False, 
-                                  "underline": False, "strikethrough": False, "color": "default"}
-                })
+        # More robust pattern that handles nested content better
+        # This pattern matches bold, italic, code, and regular text
+        pattern = r'(`[^`]*`|\*\*[^*]*\*\*|__[^_]*__|\*[^*]*\*|_[^_]*_|[^*_`]+)'
+        
+        for match in re.finditer(pattern, text):
+            content = match.group(0)
+            
+            if content.startswith('`') and content.endswith('`'):
+                rich_text.append(self._create_rich_text(content[1:-1], {"code": True, "italic": False, "bold": False, "underline": False, "strikethrough": False, "color": "default"}))
+            elif content.startswith('**') and content.endswith('**') or content.startswith('__') and content.endswith('__'):
+                rich_text.append(self._create_rich_text(content[2:-2], {"bold": True, "italic": False, "code": False, "underline": False, "strikethrough": False, "color": "default"}))
+            elif content.startswith('*') and content.endswith('*') or content.startswith('_') and content.endswith('_'):
+                rich_text.append(self._create_rich_text(content[1:-1], {"italic": True, "bold": False, "code": False, "underline": False, "strikethrough": False, "color": "default"}))
             else:
-                rich_text.append({
-                    "type": "text",
-                    "text": {"content": s},
-                    "annotations": {"italic": False, "bold": False, "code": False, 
-                                  "underline": False, "strikethrough": False, "color": "default"}
-                })
+                rich_text.append(self._create_rich_text(content))
         
         return rich_text
     
-    def convert_markdown_to_blocks(self, markdown_content: str) -> list:
-        """
-        Convert Markdown content to Notion blocks
-        支持标题、块级公式、列表、段落、分隔线、内联公式，保证顺序与原文一致
-        """
-        import re
-        blocks = []
-
-        # 清理特殊字符
-        markdown_content = markdown_content.replace('\x0c', '\\frac')
-        markdown_content = markdown_content.replace('\x07', '\\alpha')
-
-        # 1. 分割为文本块和块级公式块
-        # 支持多行和单行块级公式
-        pattern = re.compile(r'(\$\$\s*\n.*?\n\s*\$\$|\$\$.*?\$\$)', re.DOTALL)
-        parts = pattern.split(markdown_content)
-
-        for part in parts:
-            part = part.strip()
-            if not part:
-                continue
-            if part.startswith('$$'):
-                # 块级公式
-                latex = part[2:-2].strip()  # 去除前后$$
-                latex = latex.replace('\n', '\\')
-                blocks.append({
-                    "object": "block",
-                    "type": "equation",
-                    "equation": {"expression": latex}
-                })
+    def parse_equations_and_style(self, text: str) -> List[Dict[str, Any]]:
+        """Parse inline equations and text styling"""
+        rich_text = []
+        # Extract inline equations first
+        pattern = re.compile(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)', re.DOTALL)
+        last_idx = 0
+        
+        for match in pattern.finditer(text):
+            # Text before equation
+            if match.start() > last_idx:
+                before_text = text[last_idx:match.start()]
+                if before_text:
+                    rich_text.extend(self.parse_style(before_text))
+            
+            # Equation content
+            equation = match.group(1).strip('\n ').replace('\n', ' ')
+            rich_text.append({
+                "type": "equation",
+                "equation": {"expression": equation}
+            })
+            last_idx = match.end()
+        
+        # Text after last equation
+        if last_idx < len(text):
+            remaining_text = text[last_idx:]
+            if remaining_text:
+                rich_text.extend(self.parse_style(remaining_text))
+        
+        return rich_text
+    
+    def _is_list_item(self, line: str) -> tuple[bool, str, str, int]:
+        """Check if line is a list item. Returns: (is_list, type, content, indent_level)"""
+        line_strip = line.strip()
+        if not line_strip:
+            return False, "", "", 0
+        
+        indent_level = len(line) - len(line.lstrip())
+        
+        # Check numbered list
+        numbered_match = re.match(r'^\d+\.\s+(.+)$', line_strip)
+        if numbered_match:
+            return True, "numbered", numbered_match.group(1), indent_level
+        
+        # Check bulleted list
+        bullet_match = re.match(r'^[\*\-+]\s+(.+)$', line_strip)
+        if bullet_match:
+            return True, "bulleted", bullet_match.group(1), indent_level
+        
+        return False, "", "", 0
+    
+    def _process_list_group(self, lines: list, start_index: int, blocks: list) -> int:
+        """Process a group of list items with nesting"""
+        i = start_index
+        stack = []  # Stack to manage nesting levels: (indent_level, block)
+        
+        while i < len(lines):
+            line = lines[i]
+            is_list, list_type, content, indent_level = self._is_list_item(line)
+            
+            if not is_list:
+                break
+            
+            # Create current list item
+            current_block = {
+                "object": "block",
+                "type": f"{list_type}_list_item",
+                f"{list_type}_list_item": {
+                    "rich_text": self.parse_equations_and_style(content)
+                },
+                "_line_index": i
+            }
+            
+            # Handle nesting
+            while stack and stack[-1][0] >= indent_level:
+                stack.pop()
+            
+            if stack:
+                # Add to parent's children
+                parent_indent, parent_block = stack[-1]
+                parent_type = parent_block["type"]
+                if "children" not in parent_block[parent_type]:
+                    parent_block[parent_type]["children"] = []
+                parent_block[parent_type]["children"].append(current_block)
             else:
-                # 普通文本块，处理标题、列表、分隔线、段落、内联公式
-                # 先处理标题
-                def heading_sub(m):
-                    level = len(m.group(1))
-                    title = m.group(2).strip()
-                    blocks.append({
-                        "object": "block",
-                        "type": f"heading_{level}",
-                        f"heading_{level}": {
-                            "rich_text": self.parse_equations_and_style(title)
-                        }
-                    })
-                    return ''
-                part = re.sub(r'^(#{1,3})\s+(.+)$', heading_sub, part, flags=re.MULTILINE)
-
-                # 处理列表和分隔线
-                lines = part.split('\n')
-                paragraph_lines = []
-                for line in lines:
-                    line_strip = line.strip()
-                    if re.match(r'^\d+\.\s+', line_strip):
-                        # 先输出前面累计的段落
-                        if paragraph_lines:
-                            self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
-                            paragraph_lines = []
-                        item_text = re.sub(r'^\d+\.\s+', '', line_strip)
-                        blocks.append({
-                            "object": "block",
-                            "type": "numbered_list_item",
-                            "numbered_list_item": {
-                                "rich_text": self.parse_equations_and_style(item_text)
-                            }
-                        })
-                    elif line_strip.startswith('* '):
-                        if paragraph_lines:
-                            self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
-                            paragraph_lines = []
-                        item_text = line_strip[2:].strip()
-                        blocks.append({
-                            "object": "block",
-                            "type": "bulleted_list_item",
-                            "bulleted_list_item": {
-                                "rich_text": self.parse_equations_and_style(item_text)
-                            }
-                        })
-                    elif re.match(r'^\s*-{3,}\s*$', line_strip):
-                        if paragraph_lines:
-                            self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
-                            paragraph_lines = []
-                        blocks.append({"object": "block", "type": "divider", "divider": {}})
-                    else:
-                        paragraph_lines.append(line)
-                # 剩余段落
-                if paragraph_lines:
-                    self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
-        return blocks
-
-    def _append_paragraph_block(self, blocks, text):
-        """辅助函数：将段落文本分割为 Notion 段落块，支持内联公式"""
+                # Add to main blocks
+                blocks.append(current_block)
+            
+            stack.append((indent_level, current_block))
+            i += 1
+        
+        return i
+    
+    def _clean_blocks_recursively(self, blocks):
+        """Remove temporary fields from blocks recursively"""
+        if not isinstance(blocks, list):
+            return blocks
+        
+        cleaned_blocks = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            
+            # Copy block without temporary fields
+            cleaned_block = {k: v for k, v in block.items() if k != '_line_index'}
+            
+            # Clean children recursively
+            block_type = cleaned_block.get("type")
+            if block_type in ["bulleted_list_item", "numbered_list_item"]:
+                list_content = cleaned_block.get(block_type, {})
+                if "children" in list_content:
+                    list_content["children"] = self._clean_blocks_recursively(list_content["children"])
+                    if not list_content["children"]:
+                        del list_content["children"]
+            
+            cleaned_blocks.append(cleaned_block)
+        
+        return cleaned_blocks
+    
+    def _append_paragraph_block(self, blocks: list, text: str):
+        """Add paragraph block(s) to blocks list"""
         text = text.strip()
         if not text:
             return
-        # 智能分段，包含公式的整体处理，否则分割
-        dollar_count = text.count('$')
-        if dollar_count >= 2:
+        
+        # Split long paragraphs for Notion API limits
+        max_length = 2000  # Conservative limit
+        if len(text) <= max_length:
             blocks.append({
                 "object": "block",
                 "type": "paragraph",
@@ -255,8 +199,23 @@ class MarkdownToNotionConverter:
                 }
             })
         else:
-            # 分割长段落
-            for chunk in self.split_text_for_rich_text(text):
+            # Split by sentences or at word boundaries
+            chunks = []
+            current_chunk = ""
+            sentences = re.split(r'([.!?]+\s+)', text)
+            
+            for sentence in sentences:
+                if len(current_chunk) + len(sentence) <= max_length:
+                    current_chunk += sentence
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = sentence
+            
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            
+            for chunk in chunks:
                 blocks.append({
                     "object": "block",
                     "type": "paragraph",
@@ -264,136 +223,146 @@ class MarkdownToNotionConverter:
                         "rich_text": self.parse_equations_and_style(chunk)
                     }
                 })
-
-    def append_markdown_text_to_notion(self, markdown_content: str, page_id: str) -> str:
-        """
-        Append Markdown text content to existing Notion page
+    
+    def convert_markdown_to_blocks(self, markdown_content: str) -> list:
+        """Convert Markdown content to Notion blocks"""
+        blocks = []
         
-        Args:
-            markdown_content: Markdown text content
-            page_id: Notion page ID
+        # Split by block equations first
+        equation_pattern = re.compile(r'(\$\$\s*\n.*?\n\s*\$\$|\$\$.*?\$\$)', re.DOTALL)
+        parts = equation_pattern.split(markdown_content)
         
-        Returns:
-            URL of the target page
-        """
-        try:
-            logger.info(f"Processing markdown content (length: {len(markdown_content)})")
-            
-            # Convert to Notion blocks
-            blocks = self.convert_markdown_to_blocks(markdown_content)
-            logger.info(f"Converted {len(blocks)} blocks")
-            
-            # Get page info to return URL
-            page_info = self.notion.pages.retrieve(page_id=page_id)  # type: ignore
-            page_url = page_info['url']  # type: ignore
-            
-            # Add content blocks to existing page
-            if blocks:
-                # Notion API 限制每次最多 100 blocks
-                for i in range(0, len(blocks), 100):
-                    batch = blocks[i:i+100]
-                    self.notion.blocks.children.append(  # type: ignore
-                        block_id=page_id,
-                        children=batch
-                    )
-                logger.info(f"Added {len(blocks)} content blocks to existing page")
-            
-            return page_url
-            
-        except Exception as e:
-            logger.error(f"Error appending to Notion: {str(e)}")
-            raise
-
-    def upload_markdown_text_to_notion(self, markdown_content: str, page_id: str, title: str | None = None) -> str:
-        """
-        Upload Markdown text content to Notion page
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+                
+            if part.startswith('$$'):
+                # Block equation
+                latex = part[2:-2].strip().replace('\n', '\\')
+                blocks.append({
+                    "object": "block",
+                    "type": "equation",
+                    "equation": {"expression": latex}
+                })
+            else:
+                # Process text content
+                # Handle headings first
+                def heading_replacer(match):
+                    level = len(match.group(1))
+                    title = match.group(2).strip()
+                    blocks.append({
+                        "object": "block",
+                        "type": f"heading_{level}",
+                        f"heading_{level}": {
+                            "rich_text": self.parse_equations_and_style(title)
+                        }
+                    })
+                    return ''
+                
+                part = re.sub(r'^(#{1,3})\s+(.+)$', heading_replacer, part, flags=re.MULTILINE)
+                
+                # Process remaining content line by line
+                lines = part.split('\n')
+                paragraph_lines = []
+                i = 0
+                
+                while i < len(lines):
+                    line = lines[i]
+                    line_strip = line.strip()
+                    
+                    # Check for divider
+                    if re.match(r'^\s*-{3,}\s*$', line_strip):
+                        if paragraph_lines:
+                            self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
+                            paragraph_lines = []
+                        blocks.append({"object": "block", "type": "divider", "divider": {}})
+                        i += 1
+                        continue
+                    
+                    # Check for list items
+                    is_list, _, _, _ = self._is_list_item(line)
+                    if is_list:
+                        if paragraph_lines:
+                            self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
+                            paragraph_lines = []
+                        i = self._process_list_group(lines, i, blocks)
+                    else:
+                        paragraph_lines.append(line)
+                        i += 1
+                
+                # Add remaining paragraphs
+                if paragraph_lines:
+                    self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
         
-        Args:
-            markdown_content: Markdown text content
-            page_id: Notion page ID
-            title: Page title (optional, defaults to "Untitled")
+        return self._clean_blocks_recursively(blocks)
+    
+    def _upload_blocks(self, blocks: list, target_id: str, is_page: bool = False):
+        """Upload blocks to Notion in batches"""
+        if not blocks:
+            return
         
-        Returns:
-            URL of the created page
-        """
-        try:
-            logger.info(f"Processing markdown content (length: {len(markdown_content)})")
-            
-            # Convert to Notion blocks
-            blocks = self.convert_markdown_to_blocks(markdown_content)
-            logger.info(f"Converted {len(blocks)} blocks")
-            
-            # Use default title if not provided
-            if not title:
-                title = "Untitled"
-            
-            # Create new page
-            new_page = self.notion.pages.create(  # type: ignore
-                parent={"page_id": page_id},
-                properties={
-                    "title": {
-                        "title": [
-                            {
-                                "text": {
-                                    "content": title
-                                }
-                            }
-                        ]
-                    }
+        # Notion API limit: 100 blocks per request
+        for i in range(0, len(blocks), 100):
+            batch = blocks[i:i+100]
+            if is_page:
+                self.notion.blocks.children.append(block_id=target_id, children=batch)
+            else:
+                self.notion.blocks.children.append(block_id=target_id, children=batch)
+    
+    def append_markdown_to_notion(self, markdown_content: str, page_id: str) -> str:
+        """Append Markdown content to existing Notion page"""
+        logger.info(f"Processing markdown content (length: {len(markdown_content)})")
+        
+        blocks = self.convert_markdown_to_blocks(markdown_content)
+        logger.info(f"Converted {len(blocks)} blocks")
+        
+        # Get page URL
+        page_info = self.notion.pages.retrieve(page_id=page_id)
+        page_url = page_info['url']
+        
+        # Upload blocks
+        self._upload_blocks(blocks, page_id)
+        logger.info(f"Added {len(blocks)} blocks to existing page")
+        
+        return page_url
+    
+    def upload_markdown_to_notion(self, markdown_content: str, page_id: str, title: str = "Untitled") -> str:
+        """Upload Markdown content as new Notion page"""
+        logger.info(f"Processing markdown content (length: {len(markdown_content)})")
+        
+        blocks = self.convert_markdown_to_blocks(markdown_content)
+        logger.info(f"Converted {len(blocks)} blocks")
+        
+        # Create new page
+        new_page = self.notion.pages.create(
+            parent={"page_id": page_id},
+            properties={
+                "title": {
+                    "title": [{"text": {"content": title}}]
                 }
-            )
-            
-            logger.info(f"Created new page: {new_page['url']}")  # type: ignore
-            
-            # Add content blocks
-            if blocks:
-                # Notion API 限制每次最多 100 blocks
-                for i in range(0, len(blocks), 100):
-                    batch = blocks[i:i+100]
-                    self.notion.blocks.children.append(  # type: ignore
-                        block_id=new_page["id"],  # type: ignore
-                        children=batch
-                    )
-                logger.info(f"Added {len(blocks)} content blocks")
-            
-            return new_page['url']  # type: ignore
-            
-        except Exception as e:
-            logger.error(f"Error uploading to Notion: {str(e)}")
-            raise
-
-    def upload_to_notion(self, markdown_file: str, page_id: str, title: str | None = None) -> str:
-        """
-        Upload Markdown file to Notion page
+            }
+        )
         
-        Args:
-            markdown_file: Path to markdown file
-            page_id: Notion page ID
-            title: Page title (optional, defaults to filename)
+        logger.info(f"Created new page: {new_page['url']}")
         
-        Returns:
-            URL of the created page
-        """
-        try:
-            # Read markdown file
-            with open(markdown_file, "r", encoding="utf-8") as f:
-                content = f.read()
-            
-            logger.info(f"Reading markdown file: {markdown_file}")
-            
-            # Use filename as title if not provided
-            if not title:
-                title = Path(markdown_file).stem
-            
-            # Use the text upload method
-            return self.upload_markdown_text_to_notion(content, page_id, title)
-            
-        except FileNotFoundError:
-            logger.error(f"Markdown file not found: {markdown_file}")
-            raise
-        except Exception as e:
-            logger.error(f"Error uploading to Notion: {str(e)}")
-            raise
+        # Upload blocks
+        self._upload_blocks(blocks, new_page["id"])
+        logger.info(f"Added {len(blocks)} blocks to new page")
+        
+        return new_page['url']
+    
+    def upload_file_to_notion(self, markdown_file: str, page_id: str, title: str = None) -> str:
+        """Upload Markdown file to Notion"""
+        with open(markdown_file, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        logger.info(f"Reading markdown file: {markdown_file}")
+        
+        if not title:
+            title = Path(markdown_file).stem
+        
+        return self.upload_markdown_to_notion(content, page_id, title)
 
 
 def get_token_from_env() -> str:
@@ -411,66 +380,35 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Using environment variable for token
   export NOTION_TOKEN="your_token_here"
-  python md2notion.py document.md --page_id your_page_id
-
-  # Using command line argument for token
-  python md2notion.py document.md --page_id your_page_id --token your_token_here
-
-  # With custom title
-  python md2notion.py document.md --page_id your_page_id --title "My Document"
+  python md2notion_cli.py document.md --page_id your_page_id
+  python md2notion_cli.py document.md --page_id your_page_id --title "My Document"
         """
     )
     
-    parser.add_argument(
-        'markdown_file',
-        help='Path to the markdown file to convert'
-    )
-    
-    parser.add_argument(
-        '--page_id',
-        required=True,
-        help='Notion page ID where to create the new page'
-    )
-    
-    parser.add_argument(
-        '--token',
-        help='Notion API token (or set NOTION_TOKEN environment variable)'
-    )
-    
-    parser.add_argument(
-        '--title',
-        help='Title for the new Notion page (defaults to filename)'
-    )
-    
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Enable verbose logging'
-    )
+    parser.add_argument('markdown_file', help='Path to the markdown file')
+    parser.add_argument('--page_id', required=True, help='Notion page ID')
+    parser.add_argument('--token', help='Notion API token (or set NOTION_TOKEN env var)')
+    parser.add_argument('--title', help='Title for the new page (defaults to filename)')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()
     
-    # Set logging level
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
     try:
         # Get token
-        if args.token:
-            token = args.token
-        else:
-            token = get_token_from_env()
+        token = args.token or get_token_from_env()
         
-        # Validate markdown file
+        # Validate file
         if not os.path.exists(args.markdown_file):
             logger.error(f"Markdown file not found: {args.markdown_file}")
             sys.exit(1)
         
         # Convert and upload
         converter = MarkdownToNotionConverter(token)
-        url = converter.upload_to_notion(args.markdown_file, args.page_id, args.title)
+        url = converter.upload_file_to_notion(args.markdown_file, args.page_id, args.title)
         
         print(f"\n✅ Successfully uploaded to Notion!")
         print(f"📄 Page URL: {url}")

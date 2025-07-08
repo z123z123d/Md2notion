@@ -25,7 +25,7 @@ setup(
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/md2notion",
-    py_modules=["md2notion"],
+    py_modules=["md2notion_cli"],
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
