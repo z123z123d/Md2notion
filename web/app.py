@@ -7,6 +7,7 @@ A simple web interface for converting Markdown files to Notion pages.
 
 import os
 import tempfile
+import asyncio
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for
 from werkzeug.utils import secure_filename
 from md2notion_cli import MarkdownToNotionConverter
@@ -26,10 +27,12 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+
 @app.route('/')
 def index():
     """Main page"""
     return render_template('index.html')
+
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -37,15 +40,24 @@ def upload_file():
     try:
         # Get form data
         notion_token = request.form.get('notion_token', '').strip()
-        page_id = request.form.get('page_id', '').strip()
+        page_id_input = request.form.get('page_id', '').strip()
         title = request.form.get('title', '').strip()
         markdown_text = request.form.get('markdown_text', '').strip()
         
         # Validate required fields
         if not notion_token:
             return jsonify({'error': 'Notion token is required'}), 400
-        if not page_id:
+        if not page_id_input:
             return jsonify({'error': 'Page ID is required'}), 400
+        
+        # Extract page ID from URL if needed
+        try:
+            from md2notion_cli import extract_page_id_from_url
+            page_id = extract_page_id_from_url(page_id_input)
+            if page_id != page_id_input:
+                print(f"Extracted page ID: {page_id} from URL")
+        except ValueError as e:
+            return jsonify({'error': f'Invalid page ID or URL: {str(e)}'}), 400
         
         # Check if file was uploaded or text was provided
         if 'file' in request.files and request.files['file'].filename != '':
@@ -66,8 +78,15 @@ def upload_file():
                 # Use custom title if provided, otherwise use filename
                 page_title = title if title else os.path.splitext(filename)[0]
                 
-                # Upload to Notion
-                page_url = converter.upload_file_to_notion(temp_path, page_id, page_title)
+                # Upload to Notion (async)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    page_url = loop.run_until_complete(
+                        converter.upload_file_to_notion(temp_path, page_id, page_title)
+                    )
+                finally:
+                    loop.close()
                 
                 # Clean up temporary file
                 os.remove(temp_path)
@@ -91,8 +110,15 @@ def upload_file():
                 # Convert and append to Notion
                 converter = MarkdownToNotionConverter(notion_token)
                 
-                # Append content to existing page
-                page_url = converter.append_markdown_to_notion(markdown_text, page_id)
+                # Append content to existing page (async)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    page_url = loop.run_until_complete(
+                        converter.append_markdown_to_notion(markdown_text, page_id)
+                    )
+                finally:
+                    loop.close()
                 
                 return jsonify({
                     'success': True,
@@ -107,12 +133,8 @@ def upload_file():
             return jsonify({'error': 'Please provide either a file or markdown text'}), 400
             
     except Exception as e:
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
 
-@app.route('/health')
-def health_check():
-    """Health check endpoint"""
-    return jsonify({'status': 'healthy', 'service': 'md2notion-web'})
 
 if __name__ == '__main__':
     # Get port from environment or use default

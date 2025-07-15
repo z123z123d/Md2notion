@@ -20,9 +20,10 @@ A simple and powerful tool to convert Markdown files to Notion pages.
 
 2. **Get Notion Page ID:**
    - Open the Notion page where you want to add content
-   - Copy the 32-character string at the end of the URL
-   - Example: `https://www.notion.so/My-Page-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`
-   - Page ID: `a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`
+   - Copy the full URL or just the 32-character page ID
+   - Examples:
+     - Full URL: `https://www.notion.so/My-Page-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`
+     - Page ID only: `a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`
    - **Important:** Share the page with your integration
 
 ### Installation
@@ -53,8 +54,11 @@ Then open http://localhost:5000 in your browser.
 # Set environment variable (recommended)
 export NOTION_TOKEN="your_notion_token_here"
 
-# Basic usage
+# Basic usage (with page ID)
 python md2notion_cli.py document.md --page_id a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+
+# Basic usage (with full URL)
+python md2notion_cli.py document.md --page_id "https://www.notion.so/My-Page-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
 
 # With custom title
 python md2notion_cli.py document.md --page_id a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6 --title "My Title"
@@ -73,10 +77,33 @@ python md2notion_cli.py document.md --page_id a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6 -
 | Code | `` `code` `` | Inline code |
 | Bullet lists | `* item` | Bullet list items |
 | Numbered lists | `1. item` | Numbered list items |
-| Block equations | `$$equation$$` | Equation blocks |
-| Inline equations | `$equation$` | Inline equations |
+| Tables | `\| Header \| Header \|` | Table blocks |
+| Block equations | `$$equation$$` or `\[equation\]` | Equation blocks |
+| Inline equations | `$equation$` or `\(equation\)` | Inline equations |
 | Dividers | `---` | Divider blocks |
 | Paragraphs | Regular text | Paragraph blocks |
+
+### 🧮 数学公式支持
+
+md2notion 支持多种数学公式格式：
+
+**行内公式：**
+- `$E = mc^2$` - 美元符号格式
+- `\(E = mc^2\)` - 反斜杠括号格式
+
+**块级公式：**
+- `$$equation$$` - 美元符号格式
+- `\[equation\]` - 反斜杠括号格式
+
+**示例：**
+```markdown
+行内公式：$\\alpha + \\beta = \\gamma$
+
+块级公式：
+$$
+\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}
+$$
+```
 
 ## 📋 Command Line Options
 
@@ -103,6 +130,9 @@ md2notion/
 ├── web/                  # Web application files
 │   ├── app.py           # Flask web app
 │   └── templates/       # HTML templates
+├── tests/                # Test files and examples
+│   ├── test_*.py        # Test scripts
+│   └── example_*.md     # Example markdown files
 ├── requirements.txt      # Python dependencies
 ├── setup.py             # Package setup
 ├── build.py             # Build script
@@ -119,6 +149,17 @@ pip install -e .
 ### Build
 ```bash
 python build.py
+```
+
+### Testing
+```bash
+# Run all tests
+python run_tests.py
+
+# Run individual tests
+python tests/test_url_extraction.py
+python tests/test_table.py
+python tests/test_math_formats.py
 ```
 
 ## 📄 License

@@ -10,11 +10,12 @@ import os
 import sys
 import argparse
 import logging
+import asyncio
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 try:
-    from notion_client import Client
+    from notion_client import AsyncClient
 except ImportError:
     print("Error: notion-client package not found. Please install it with: pip install notion-client")
     sys.exit(1)
@@ -29,9 +30,9 @@ class MarkdownToNotionConverter:
     
     def __init__(self, token: str):
         """Initialize the converter with Notion API token"""
-        self.notion = Client(auth=token)
+        self.notion = AsyncClient(auth=token)
     
-    def _create_rich_text(self, content: str, annotations: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _create_rich_text(self, content: str, annotations: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Create a rich text object"""
         return {
             "type": "text",
@@ -67,8 +68,8 @@ class MarkdownToNotionConverter:
     def parse_equations_and_style(self, text: str) -> List[Dict[str, Any]]:
         """Parse inline equations and text styling"""
         rich_text = []
-        # Extract inline equations first
-        pattern = re.compile(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)', re.DOTALL)
+        # Extract inline equations first (support both $...$ and \(...\) formats)
+        pattern = re.compile(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)|\\\((.+?)\\\)', re.DOTALL)
         last_idx = 0
         
         for match in pattern.finditer(text):
@@ -78,8 +79,12 @@ class MarkdownToNotionConverter:
                 if before_text:
                     rich_text.extend(self.parse_style(before_text))
             
-            # Equation content
-            equation = match.group(1).strip('\n ').replace('\n', ' ')
+            # Equation content (handle both formats)
+            if match.group(1):  # $...$ format
+                equation = match.group(1).strip('\n ').replace('\n', ' ')
+            else:  # \(...\) format
+                equation = match.group(2).strip('\n ').replace('\n', ' ')
+            
             rich_text.append({
                 "type": "equation",
                 "equation": {"expression": equation}
@@ -93,6 +98,77 @@ class MarkdownToNotionConverter:
                 rich_text.extend(self.parse_style(remaining_text))
         
         return rich_text
+    
+    def _parse_table(self, lines: List[str], start_index: int) -> tuple[List[Dict[str, Any]], int]:
+        """Parse markdown table and convert to Notion table blocks"""
+        table_blocks = []
+        i = start_index
+        
+        # Parse header
+        if i >= len(lines):
+            return table_blocks, i
+        
+        header_line = lines[i].strip()
+        if not header_line.startswith('|') or not header_line.endswith('|'):
+            return table_blocks, i
+        
+        # Parse header cells
+        header_cells = [cell.strip() for cell in header_line.split('|')[1:-1]]
+        
+        # Skip separator line (| --- | --- |)
+        i += 1
+        if i < len(lines) and lines[i].strip().startswith('|'):
+            i += 1
+        
+        # Parse data rows
+        data_rows = []
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line.startswith('|') or not line.endswith('|'):
+                break
+            
+            row_cells = [cell.strip() for cell in line.split('|')[1:-1]]
+            if len(row_cells) == len(header_cells):
+                data_rows.append(row_cells)
+            i += 1
+        
+        # Create table block
+        if header_cells and data_rows:
+            table_block = {
+                "object": "block",
+                "type": "table",
+                "table": {
+                    "table_width": len(header_cells),
+                    "has_column_header": True,
+                    "has_row_header": False,
+                    "children": []
+                }
+            }
+            
+            # Add header row
+            header_row = {
+                "object": "block",
+                "type": "table_row",
+                "table_row": {
+                    "cells": [[self._create_rich_text(cell)] for cell in header_cells]
+                }
+            }
+            table_block["table"]["children"].append(header_row)
+            
+            # Add data rows
+            for row in data_rows:
+                data_row = {
+                    "object": "block",
+                    "type": "table_row",
+                    "table_row": {
+                        "cells": [[self._create_rich_text(cell)] for cell in row]
+                    }
+                }
+                table_block["table"]["children"].append(data_row)
+            
+            table_blocks.append(table_block)
+        
+        return table_blocks, i
     
     def _is_list_item(self, line: str) -> tuple[bool, str, str, int]:
         """Check if line is a list item. Returns: (is_list, type, content, indent_level)"""
@@ -228,8 +304,8 @@ class MarkdownToNotionConverter:
         """Convert Markdown content to Notion blocks"""
         blocks = []
         
-        # Split by block equations first
-        equation_pattern = re.compile(r'(\$\$\s*\n.*?\n\s*\$\$|\$\$.*?\$\$)', re.DOTALL)
+        # Split by block equations first (support both $$...$$ and \[...\] formats)
+        equation_pattern = re.compile(r'(\$\$\s*\n.*?\n\s*\$\$|\$\$.*?\$\$|\\\[.*?\\\])', re.DOTALL)
         parts = equation_pattern.split(markdown_content)
         
         for part in parts:
@@ -238,7 +314,15 @@ class MarkdownToNotionConverter:
                 continue
                 
             if part.startswith('$$'):
-                # Block equation
+                # Block equation ($$...$$ format)
+                latex = part[2:-2].strip().replace('\n', '\\')
+                blocks.append({
+                    "object": "block",
+                    "type": "equation",
+                    "equation": {"expression": latex}
+                })
+            elif part.startswith('\\[') and part.endswith('\\]'):
+                # Block equation (\[...\] format)
                 latex = part[2:-2].strip().replace('\n', '\\')
                 blocks.append({
                     "object": "block",
@@ -280,6 +364,15 @@ class MarkdownToNotionConverter:
                         i += 1
                         continue
                     
+                    # Check for table
+                    if line_strip.startswith('|') and line_strip.endswith('|'):
+                        if paragraph_lines:
+                            self._append_paragraph_block(blocks, '\n'.join(paragraph_lines))
+                            paragraph_lines = []
+                        table_blocks, i = self._parse_table(lines, i)
+                        blocks.extend(table_blocks)
+                        continue
+                    
                     # Check for list items
                     is_list, _, _, _ = self._is_list_item(line)
                     if is_list:
@@ -297,7 +390,7 @@ class MarkdownToNotionConverter:
         
         return self._clean_blocks_recursively(blocks)
     
-    def _upload_blocks(self, blocks: list, target_id: str, is_page: bool = False):
+    async def _upload_blocks(self, blocks: list, target_id: str, is_page: bool = False):
         """Upload blocks to Notion in batches"""
         if not blocks:
             return
@@ -305,12 +398,9 @@ class MarkdownToNotionConverter:
         # Notion API limit: 100 blocks per request
         for i in range(0, len(blocks), 100):
             batch = blocks[i:i+100]
-            if is_page:
-                self.notion.blocks.children.append(block_id=target_id, children=batch)
-            else:
-                self.notion.blocks.children.append(block_id=target_id, children=batch)
+            await self.notion.blocks.children.append(block_id=target_id, children=batch)
     
-    def append_markdown_to_notion(self, markdown_content: str, page_id: str) -> str:
+    async def append_markdown_to_notion(self, markdown_content: str, page_id: str) -> str:
         """Append Markdown content to existing Notion page"""
         logger.info(f"Processing markdown content (length: {len(markdown_content)})")
         
@@ -318,16 +408,16 @@ class MarkdownToNotionConverter:
         logger.info(f"Converted {len(blocks)} blocks")
         
         # Get page URL
-        page_info = self.notion.pages.retrieve(page_id=page_id)
+        page_info = await self.notion.pages.retrieve(page_id=page_id)
         page_url = page_info['url']
         
         # Upload blocks
-        self._upload_blocks(blocks, page_id)
+        await self._upload_blocks(blocks, page_id)
         logger.info(f"Added {len(blocks)} blocks to existing page")
         
         return page_url
     
-    def upload_markdown_to_notion(self, markdown_content: str, page_id: str, title: str = "Untitled") -> str:
+    async def upload_markdown_to_notion(self, markdown_content: str, page_id: str, title: str = "Untitled") -> str:
         """Upload Markdown content as new Notion page"""
         logger.info(f"Processing markdown content (length: {len(markdown_content)})")
         
@@ -335,7 +425,7 @@ class MarkdownToNotionConverter:
         logger.info(f"Converted {len(blocks)} blocks")
         
         # Create new page
-        new_page = self.notion.pages.create(
+        new_page = await self.notion.pages.create(
             parent={"page_id": page_id},
             properties={
                 "title": {
@@ -347,12 +437,12 @@ class MarkdownToNotionConverter:
         logger.info(f"Created new page: {new_page['url']}")
         
         # Upload blocks
-        self._upload_blocks(blocks, new_page["id"])
+        await self._upload_blocks(blocks, new_page["id"])
         logger.info(f"Added {len(blocks)} blocks to new page")
         
         return new_page['url']
     
-    def upload_file_to_notion(self, markdown_file: str, page_id: str, title: str = None) -> str:
+    async def upload_file_to_notion(self, markdown_file: str, page_id: str, title: Optional[str] = None) -> str:
         """Upload Markdown file to Notion"""
         with open(markdown_file, "r", encoding="utf-8") as f:
             content = f.read()
@@ -362,7 +452,38 @@ class MarkdownToNotionConverter:
         if not title:
             title = Path(markdown_file).stem
         
-        return self.upload_markdown_to_notion(content, page_id, title)
+        return await self.upload_markdown_to_notion(content, page_id, title)
+
+
+def extract_page_id_from_url(url: str) -> str:
+    """Extract page ID from Notion URL"""
+    import re
+    
+    # Pattern for Notion page URLs
+    # Examples:
+    # https://www.notion.so/z123z123d/Survey-latent-reasoning-22f97b0feb94808fbfa4c07162457633?source=copy_link
+    # https://www.notion.so/My-Page-22f97b0feb94808fbfa4c07162457633
+    # https://www.notion.so/22f97b0feb94808fbfa4c07162457633
+    
+    patterns = [
+        # Pattern for URLs with workspace and page name
+        r'https://www\.notion\.so/[^/]+/[^-]*?([a-f0-9]{32})',
+        # Pattern for direct page ID URLs
+        r'https://www\.notion\.so/([a-f0-9]{32})',
+        # Pattern for URLs with just page ID
+        r'([a-f0-9]{32})'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    
+    # If no pattern matches, assume it's already a page ID
+    if re.match(r'^[a-f0-9]{32}$', url):
+        return url
+    
+    raise ValueError(f"Could not extract page ID from URL: {url}")
 
 
 def get_token_from_env() -> str:
@@ -373,8 +494,8 @@ def get_token_from_env() -> str:
     return token
 
 
-def main():
-    """Main command-line interface"""
+async def main_async():
+    """Main command-line interface (async version)"""
     parser = argparse.ArgumentParser(
         description="Convert Markdown files to Notion pages",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -401,6 +522,15 @@ Examples:
         # Get token
         token = args.token or get_token_from_env()
         
+        # Extract page ID from URL if needed
+        try:
+            page_id = extract_page_id_from_url(args.page_id)
+            if page_id != args.page_id:
+                logger.info(f"Extracted page ID: {page_id} from URL")
+        except ValueError as e:
+            logger.error(f"Invalid page ID or URL: {str(e)}")
+            sys.exit(1)
+        
         # Validate file
         if not os.path.exists(args.markdown_file):
             logger.error(f"Markdown file not found: {args.markdown_file}")
@@ -408,7 +538,7 @@ Examples:
         
         # Convert and upload
         converter = MarkdownToNotionConverter(token)
-        url = converter.upload_file_to_notion(args.markdown_file, args.page_id, args.title)
+        url = await converter.upload_file_to_notion(args.markdown_file, page_id, args.title)
         
         print(f"\n✅ Successfully uploaded to Notion!")
         print(f"📄 Page URL: {url}")
@@ -419,6 +549,11 @@ Examples:
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         sys.exit(1)
+
+
+def main():
+    """Main command-line interface"""
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":
