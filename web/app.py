@@ -79,13 +79,28 @@ def upload_file():
                 page_title = title if title else os.path.splitext(filename)[0]
                 
                 # Upload to Notion (async)
+                print(f"🔍 DEBUG: Starting Notion upload process")
+                print(f"🔍 DEBUG: File path: {temp_path}")
+                print(f"🔍 DEBUG: Page ID: {page_id}")
+                print(f"🔍 DEBUG: Page title: {page_title}")
+                
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
+                    print(f"🔍 DEBUG: Creating async event loop")
                     page_url = loop.run_until_complete(
                         converter.upload_file_to_notion(temp_path, page_id, page_title)
                     )
+                    print(f"🔍 DEBUG: Successfully got page URL: {page_url}")
+                except Exception as async_error:
+                    print(f"❌ DEBUG: Async operation failed: {str(async_error)}")
+                    print(f"❌ DEBUG: Error type: {type(async_error).__name__}")
+                    import traceback
+                    print(f"❌ DEBUG: Full traceback:")
+                    traceback.print_exc()
+                    raise async_error
                 finally:
+                    print(f"🔍 DEBUG: Closing event loop")
                     loop.close()
                 
                 # Clean up temporary file
@@ -99,9 +114,17 @@ def upload_file():
                 })
                 
             except Exception as e:
+                print(f"❌ DEBUG: File upload error: {str(e)}")
+                print(f"❌ DEBUG: Error type: {type(e).__name__}")
+                import traceback
+                print(f"❌ DEBUG: Full traceback for file upload:")
+                traceback.print_exc()
+                
                 # Clean up temporary file on error
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
+                    print(f"🔍 DEBUG: Cleaned up temporary file: {temp_path}")
+                
                 return jsonify({'error': f'Error uploading to Notion: {str(e)}'}), 500
                 
         elif markdown_text:
@@ -111,13 +134,28 @@ def upload_file():
                 converter = MarkdownToNotionConverter(notion_token)
                 
                 # Append content to existing page (async)
+                print(f"🔍 DEBUG: Starting Notion append process")
+                print(f"🔍 DEBUG: Page ID: {page_id}")
+                print(f"🔍 DEBUG: Content length: {len(markdown_text)} characters")
+                print(f"🔍 DEBUG: Content preview: {markdown_text[:200]}...")
+                
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
+                    print(f"🔍 DEBUG: Creating async event loop for append")
                     page_url = loop.run_until_complete(
                         converter.append_markdown_to_notion(markdown_text, page_id)
                     )
+                    print(f"🔍 DEBUG: Successfully appended content, page URL: {page_url}")
+                except Exception as async_error:
+                    print(f"❌ DEBUG: Async append operation failed: {str(async_error)}")
+                    print(f"❌ DEBUG: Error type: {type(async_error).__name__}")
+                    import traceback
+                    print(f"❌ DEBUG: Full traceback for append:")
+                    traceback.print_exc()
+                    raise async_error
                 finally:
+                    print(f"🔍 DEBUG: Closing event loop for append")
                     loop.close()
                 
                 return jsonify({
@@ -128,11 +166,21 @@ def upload_file():
                 })
                 
             except Exception as e:
+                print(f"❌ DEBUG: Text append error: {str(e)}")
+                print(f"❌ DEBUG: Error type: {type(e).__name__}")
+                import traceback
+                print(f"❌ DEBUG: Full traceback for text append:")
+                traceback.print_exc()
                 return jsonify({'error': f'Error appending to Notion: {str(e)}'}), 500
         else:
             return jsonify({'error': 'Please provide either a file or markdown text'}), 400
             
     except Exception as e:
+        print(f"❌ DEBUG: Unexpected error in upload_file: {str(e)}")
+        print(f"❌ DEBUG: Error type: {type(e).__name__}")
+        import traceback
+        print(f"❌ DEBUG: Full traceback for unexpected error:")
+        traceback.print_exc()
         return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
 
 

@@ -11,6 +11,7 @@ import sys
 import argparse
 import logging
 import asyncio
+import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -66,7 +67,99 @@ class MarkdownToNotionConverter:
         return rich_text
     
     def parse_equations_and_style(self, text: str) -> List[Dict[str, Any]]:
-        """Parse inline equations and text styling"""
+        """Parse inline equations and text styling with better mixed content handling"""
+        rich_text = []
+        
+        # First, check if there are styled blocks that contain equations
+        # Pattern to match styled content that might contain equations
+        styled_pattern = re.compile(r'(\*\*[^*]*?\$[^*]*?\$[^*]*?\*\*|__[^_]*?\$[^_]*?\$[^_]*?__|\*[^*]*?\$[^*]*?\$[^*]*?\*|_[^_]*?\$[^_]*?\$[^_]*?_)')
+        
+        # Find all styled content with equations
+        styled_matches = list(styled_pattern.finditer(text))
+        
+        if styled_matches:
+            # Process styled content with equations
+            last_idx = 0
+            for match in styled_matches:
+                # Add text before styled content
+                if match.start() > last_idx:
+                    before_text = text[last_idx:match.start()]
+                    if before_text:
+                        rich_text.extend(self._parse_mixed_content(before_text))
+                
+                # Process styled content with equations
+                styled_content = match.group(0)
+                rich_text.extend(self._parse_styled_with_equations(styled_content))
+                
+                last_idx = match.end()
+            
+            # Add remaining text
+            if last_idx < len(text):
+                remaining_text = text[last_idx:]
+                if remaining_text:
+                    rich_text.extend(self._parse_mixed_content(remaining_text))
+        else:
+            # No styled content with equations, use regular parsing
+            rich_text = self._parse_mixed_content(text)
+        
+        return rich_text
+    
+    def _parse_styled_with_equations(self, styled_content: str) -> List[Dict[str, Any]]:
+        """Parse styled content that contains equations"""
+        rich_text = []
+        
+        # Determine the style type
+        if styled_content.startswith('**') and styled_content.endswith('**'):
+            style = {"bold": True, "italic": False, "code": False, "underline": False, "strikethrough": False, "color": "default"}
+            content = styled_content[2:-2]
+        elif styled_content.startswith('__') and styled_content.endswith('__'):
+            style = {"bold": True, "italic": False, "code": False, "underline": False, "strikethrough": False, "color": "default"}
+            content = styled_content[2:-2]
+        elif styled_content.startswith('*') and styled_content.endswith('*'):
+            style = {"bold": False, "italic": True, "code": False, "underline": False, "strikethrough": False, "color": "default"}
+            content = styled_content[1:-1]
+        elif styled_content.startswith('_') and styled_content.endswith('_'):
+            style = {"bold": False, "italic": True, "code": False, "underline": False, "strikethrough": False, "color": "default"}
+            content = styled_content[1:-1]
+        else:
+            # Fallback to regular text
+            return [self._create_rich_text(styled_content)]
+        
+        # Parse equations within the styled content
+        equation_pattern = re.compile(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)|\\\((.+?)\\\)', re.DOTALL)
+        last_idx = 0
+        
+        for match in equation_pattern.finditer(content):
+            # Text before equation
+            if match.start() > last_idx:
+                before_text = content[last_idx:match.start()]
+                if before_text:
+                    rich_text.append(self._create_rich_text(before_text, style))
+            
+            # Equation content
+            if match.group(1):  # $...$ format
+                equation = match.group(1).strip('\n ').replace('\n', ' ')
+            else:  # \(...\) format
+                equation = match.group(2).strip('\n ').replace('\n', ' ')
+            
+            if equation:
+                rich_text.append({
+                    "type": "equation",
+                    "equation": {"expression": equation}
+                })
+            
+            last_idx = match.end()
+        
+        # Text after last equation
+        if last_idx < len(content):
+            remaining_text = content[last_idx:]
+            if remaining_text:
+                rich_text.append(self._create_rich_text(remaining_text, style))
+        
+        return rich_text
+    
+    def _parse_mixed_content(self, text: str) -> List[Dict[str, Any]]:
+        """Parse regular text that may contain equations and styling"""
         rich_text = []
         # Extract inline equations first (support both $...$ and \(...\) formats)
         pattern = re.compile(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)|\\\((.+?)\\\)', re.DOTALL)
@@ -85,10 +178,12 @@ class MarkdownToNotionConverter:
             else:  # \(...\) format
                 equation = match.group(2).strip('\n ').replace('\n', ' ')
             
-            rich_text.append({
-                "type": "equation",
-                "equation": {"expression": equation}
-            })
+            if equation:
+                rich_text.append({
+                    "type": "equation",
+                    "equation": {"expression": equation}
+                })
+            
             last_idx = match.end()
         
         # Text after last equation
@@ -98,6 +193,7 @@ class MarkdownToNotionConverter:
                 rich_text.extend(self.parse_style(remaining_text))
         
         return rich_text
+
     
     def _parse_table(self, lines: List[str], start_index: int) -> tuple[List[Dict[str, Any]], int]:
         """Parse markdown table and convert to Notion table blocks"""
@@ -134,6 +230,7 @@ class MarkdownToNotionConverter:
         
         # Create table block
         if header_cells and data_rows:
+            # Per Notion validation, table rows must live under table.children
             table_block = {
                 "object": "block",
                 "type": "table",
@@ -395,21 +492,33 @@ class MarkdownToNotionConverter:
         if not blocks:
             return
         
+        logger.info(f"Uploading {len(blocks)} blocks to Notion")
+        
         # Notion API limit: 100 blocks per request
-        for i in range(0, len(blocks), 100):
-            batch = blocks[i:i+100]
-            await self.notion.blocks.children.append(block_id=target_id, children=batch)
+        batch_size = 100
+        
+        for i in range(0, len(blocks), batch_size):
+            batch = blocks[i:i+batch_size]
+            batch_num = i // batch_size + 1
+            
+            try:
+                await self.notion.blocks.children.append(block_id=target_id, children=batch)
+                logger.info(f"Uploaded batch {batch_num} ({len(batch)} blocks)")
+            except Exception as e:
+                logger.error(f"Failed to upload batch {batch_num}: {str(e)}")
+                raise e
     
     async def append_markdown_to_notion(self, markdown_content: str, page_id: str) -> str:
         """Append Markdown content to existing Notion page"""
         logger.info(f"Processing markdown content (length: {len(markdown_content)})")
         
-        blocks = self.convert_markdown_to_blocks(markdown_content)
-        logger.info(f"Converted {len(blocks)} blocks")
-        
         # Get page URL
         page_info = await self.notion.pages.retrieve(page_id=page_id)
         page_url = page_info['url']
+        
+        # Convert markdown to blocks
+        blocks = self.convert_markdown_to_blocks(markdown_content)
+        logger.info(f"Converted {len(blocks)} blocks")
         
         # Upload blocks
         await self._upload_blocks(blocks, page_id)
